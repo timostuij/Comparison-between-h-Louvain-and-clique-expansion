@@ -1,0 +1,411 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "5ea1dc96-b31b-47db-af79-38e56d1cde78",
+   "metadata": {},
+   "source": [
+    "# Final project for Complex Networks Theory and Applications "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "5e672a0a-29cf-4689-b51f-11e26c11b75e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from sklearn.metrics import normalized_mutual_info_score \n",
+    "import hypernetx as hnx\n",
+    "import hypernetx.algorithms.hypergraph_modularity as hmod\n",
+    "import collections\n",
+    "from collections import Counter\n",
+    "import igraph as ig\n",
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import h_louvain as hl\n",
+    "import csv\n",
+    "import xgi\n",
+    "import os\n",
+    "import networkx as nx\n",
+    "import community as community_louvain  # Install with `pip install python-louvain`\n",
+    "from itertools import combinations\n",
+    "import matplotlib.pyplot as plt"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0217d5b0-3cf4-4e56-ad04-c867c38a1efa",
+   "metadata": {},
+   "source": [
+    "### Loading the dataset "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 74,
+   "id": "73fb682e-4135-45d8-9193-fbc8c6a8776f",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Available node attributes: {'plant': 'Abutilon theophrasti'}\n",
+      "Number of nodes: 456\n",
+      "Number of hyperedges: 1044\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Load the hypergraph dataset from XGI\n",
+    "data_hypergraph = xgi.load_xgi_data(\"plant-pollinator-mpl-062\")\n",
+    "\n",
+    "# Extract edges and node labels from the XGI hypergraph\n",
+    "edges_with_labels = []\n",
+    "for edge in data_hypergraph.edges:\n",
+    "    nodes = data_hypergraph.edges.members(edge)\n",
+    "    edges_with_labels.append(list(nodes))\n",
+    "\n",
+    "# Dynamically detect node attribute keys\n",
+    "sample_node = next(iter(data_hypergraph.nodes))\n",
+    "node_attributes = data_hypergraph.nodes[sample_node]\n",
+    "print(\"Available node attributes:\", node_attributes)\n",
+    "\n",
+    "# Automatically select the first available attribute key for labels\n",
+    "attribute_key = next(iter(node_attributes.keys()), 'Unknown')\n",
+    "\n",
+    "# Map the detected attribute to node labels\n",
+    "node_labels = {node: data_hypergraph.nodes[node].get(attribute_key, 'Unknown') for node in data_hypergraph.nodes}\n",
+    "\n",
+    "# Prepare node properties dictionary according to HyperNetX's format\n",
+    "node_properties = {node: {'label': label} for node, label in node_labels.items()}\n",
+    "\n",
+    "# Convert to HyperNetX hypergraph while preserving detected labels\n",
+    "hypergraph = hnx.Hypergraph(dict(enumerate(edges_with_labels)), node_properties=node_properties)\n",
+    "\n",
+    "# Optional: Print summary to verify conversion\n",
+    "print(f\"Number of nodes: {len(hypergraph.nodes)}\")\n",
+    "print(f\"Number of hyperedges: {len(hypergraph.edges)}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4dc57708-daae-4067-aeee-1fa64b74c62b",
+   "metadata": {},
+   "source": [
+    "# h-Louvain "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 76,
+   "id": "c466a03e-659f-43d1-b214-cdc0685d0dbf",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "CPU times: user 434 ms, sys: 28.5 ms, total: 463 ms\n",
+      "Wall time: 464 ms\n"
+     ]
+    }
+   ],
+   "source": [
+    "%%time\n",
+    "# hmod_tau: w(d,c) = (c/d)^tau for c>d/2 else 0\n",
+    "# hmod_tau = 1 (linear) \n",
+    "# hmod_tau = 0 (majority)\n",
+    "# hmod_tau = \"infinity\" (strict)\n",
+    "\n",
+    "hL = hl.hLouvain(hypergraph, hmod_tau=2, resolution = 1, random_seed = 123) "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 78,
+   "id": "eddc29c8-99c5-44a3-a0d9-642050c8fed9",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "alphas_out [0.0, 0.8, 0.96, 0.992, 1]\n",
+      "final_alpha 1\n",
+      "qH-basic = 0.28691814402866445\n",
+      "qH+last_step = 0.2934359691724826\n",
+      "CPU times: user 18min 12s, sys: 21.5 s, total: 18min 34s\n",
+      "Wall time: 18min 22s\n"
+     ]
+    }
+   ],
+   "source": [
+    "%%time\n",
+    "\n",
+    "alphas = []\n",
+    "c = 0.3\n",
+    "b = 0.8\n",
+    "for i in range(30):\n",
+    "    alphas.append(1-((1-b)**i))\n",
+    "    \n",
+    "    \n",
+    "Als, A, qH_ls, qH_basic, alphas_out = hL.h_louvain_community_plus_last_step(alphas = alphas, change_frequency = c)\n",
+    "\n",
+    "\n",
+    "print(\"alphas_out\", alphas_out)\n",
+    "print(\"final_alpha\", alphas_out[-1])\n",
+    "print(\"qH-basic =\",qH_basic)\n",
+    "print(\"qH+last_step =\",qH_ls)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "f7219782-c0df-44b6-9312-9c4a3944f49b",
+   "metadata": {},
+   "source": [
+    "# Regular Louvain"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 80,
+   "id": "45cec5f2-c589-4c03-bdd6-3bd432a6c883",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def clique_expansion(hypergraph):\n",
+    "    # Initialize an empty graph\n",
+    "    graph = nx.Graph()\n",
+    "\n",
+    "    # Iterate through each hyperedge in the hypergraph\n",
+    "    for edge in hypergraph.edges:\n",
+    "        nodes_in_edge = list(hypergraph.edges[edge])\n",
+    "\n",
+    "        # Add edges for all pairs of nodes in the hyperedge (clique expansion)\n",
+    "        for i in range(len(nodes_in_edge)):\n",
+    "            for j in range(i + 1, len(nodes_in_edge)):\n",
+    "                graph.add_edge(nodes_in_edge[i], nodes_in_edge[j])\n",
+    "\n",
+    "    return graph\n",
+    "\n",
+    "# Apply Clique Expansion to the Hypergraph\n",
+    "hypergraph_clique = clique_expansion(hypergraph)\n",
+    "\n",
+    "# Apply Louvain Community Detection\n",
+    "hypergraph_regular_clique = nx.community.louvain_communities(hypergraph_clique, seed=123)\n",
+    "\n",
+    "\n",
+    "# print(\"h-Louvain clique:\")\n",
+    "# print(Als)\n",
+    "# print(\"----------------------------------------------------------------------------------------\")\n",
+    "# print(\"regular louvain clique:\")\n",
+    "# print(hypergraph_regular_clique) "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "fe1acc58-69c3-4f72-8e9f-9075ec4b206c",
+   "metadata": {},
+   "source": [
+    "### Comparing the results with NMI "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 82,
+   "id": "57448665-3f98-4392-925a-60554a9b17a2",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Normalized Mutual Information (NMI): 0.2084105105504853\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Convert h-Louvain clique into a flat list of node-to-cluster assignments\n",
+    "h_louvain_partition = {}\n",
+    "for i, cluster in enumerate(Als):\n",
+    "    for node in cluster:\n",
+    "        h_louvain_partition[node] = i\n",
+    "\n",
+    "# Convert regular Louvain clique into a flat list of node-to-cluster assignments\n",
+    "regular_partition = {}\n",
+    "for i, cluster in enumerate(hypergraph_regular_clique):\n",
+    "    for node in cluster:\n",
+    "        regular_partition[node] = i\n",
+    "\n",
+    "# Align partitions to a consistent node set\n",
+    "all_nodes = set(h_louvain_partition.keys()).union(set(regular_partition.keys()))\n",
+    "h_louvain_labels = [h_louvain_partition.get(node, -1) for node in all_nodes]\n",
+    "regular_labels = [regular_partition.get(node, -1) for node in all_nodes]\n",
+    "\n",
+    "# Compute NMI\n",
+    "nmi_score = normalized_mutual_info_score(h_louvain_labels, regular_labels)\n",
+    "print(\"Normalized Mutual Information (NMI):\", nmi_score)\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "32c313b4-b597-4590-8ecc-8e2763d1852d",
+   "metadata": {},
+   "source": [
+    "## Checking edge proportions "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "051ef506-5eea-46b8-af52-49f2c5b7d83a",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import xgi\n",
+    "import matplotlib.pyplot as plt\n",
+    "\n",
+    "def plot_hyperedge_distribution(dataset_names, dataset_paths):\n",
+    "    \"\"\"\n",
+    "    Plot the proportion of hyperedges by size for multiple datasets, overlapping them in a single graph.\n",
+    "\n",
+    "    Parameters:\n",
+    "        dataset_names (list of str): Names of the datasets.\n",
+    "        dataset_paths (list of str): Paths to the dataset files.\n",
+    "    \"\"\"\n",
+    "    plt.figure(figsize=(8, 6))\n",
+    "\n",
+    "    for dataset_name, dataset_path in zip(dataset_names, dataset_paths):\n",
+    "        # Load the hypergraph dataset\n",
+    "        hypergraph = xgi.load_xgi_data(dataset_path)\n",
+    "\n",
+    "        # Get the sizes of all hyperedges\n",
+    "        edge_sizes = [len(hypergraph.edges.members(edge)) for edge in hypergraph.edges]\n",
+    "\n",
+    "        if len(edge_sizes) == 0:\n",
+    "            print(f\"No edges found in dataset: {dataset_name}\")\n",
+    "            continue\n",
+    "\n",
+    "        # Count the frequency of each edge size\n",
+    "        max_size = max(edge_sizes)\n",
+    "        size_counts = {size: edge_sizes.count(size) for size in range(2, max_size + 1)}\n",
+    "\n",
+    "        # Calculate the total number of edges\n",
+    "        total_edges = sum(size_counts.values())\n",
+    "\n",
+    "        # Compute the proportions\n",
+    "        proportions = {size: count / total_edges for size, count in size_counts.items()}\n",
+    "\n",
+    "        # Plot the proportions\n",
+    "        plt.plot(\n",
+    "            list(proportions.keys()),\n",
+    "            list(proportions.values()),\n",
+    "            label=dataset_name,\n",
+    "            linewidth=2  # Thicker lines for better visibility\n",
+    "        )\n",
+    "\n",
+    "    # Customize the plot\n",
+    "    plt.title(\"Proportion of Hyperedges by Size\", fontsize=14)\n",
+    "    plt.xlabel(\"Hyperedge Size (Number of Nodes)\", fontsize=12)\n",
+    "    plt.ylabel(\"Proportion of Total Hyperedges\", fontsize=12)\n",
+    "    plt.legend(title=\"Datasets\", fontsize=10)\n",
+    "    plt.grid(True, linestyle=\"--\", alpha=0.7)\n",
+    "    plt.tight_layout()\n",
+    "    plt.savefig(\"hyperedge_distribution.pdf\", format=\"pdf\", bbox_inches=\"tight\")\n",
+    "    plt.show()\n",
+    "\n",
+    "def calculate_proportion_small_hyperedges(dataset_names, dataset_paths, threshold=20):\n",
+    "    \"\"\"\n",
+    "    Calculate the proportion of hyperedges with size less than or equal to the given threshold for each dataset.\n",
+    "\n",
+    "    Parameters:\n",
+    "        dataset_names (list of str): Names of the datasets.\n",
+    "        dataset_paths (list of str): Paths to the dataset files.\n",
+    "        threshold (int): The size threshold for hyperedges.\n",
+    "\n",
+    "    Returns:\n",
+    "        dict: A dictionary with dataset names as keys and proportions as values.\n",
+    "    \"\"\"\n",
+    "    proportions = {}\n",
+    "\n",
+    "    for dataset_name, dataset_path in zip(dataset_names, dataset_paths):\n",
+    "        # Load the hypergraph dataset\n",
+    "        hypergraph = xgi.load_xgi_data(dataset_path)\n",
+    "\n",
+    "        # Get the sizes of all hyperedges\n",
+    "        edge_sizes = [len(hypergraph.edges.members(edge)) for edge in hypergraph.edges]\n",
+    "\n",
+    "        if len(edge_sizes) == 0:\n",
+    "            print(f\"No edges found in dataset: {dataset_name}\")\n",
+    "            proportions[dataset_name] = 0\n",
+    "            continue\n",
+    "\n",
+    "        # Count the number of edges with size <= threshold\n",
+    "        small_edges_count = sum(1 for size in edge_sizes if size <= threshold)\n",
+    "\n",
+    "        # Calculate the total number of edges\n",
+    "        total_edges = len(edge_sizes)\n",
+    "\n",
+    "        # Calculate the proportion\n",
+    "        proportions[dataset_name] = small_edges_count / total_edges\n",
+    "\n",
+    "    return proportions\n",
+    "\n",
+    "# Dataset names and paths\n",
+    "dataset_names = [\n",
+    "    \"house-committees\",\n",
+    "    \"diseasome\",\n",
+    "    \"senate-committees\",\n",
+    "    \"plant-pollinator-mpl-062\",\n",
+    "]\n",
+    "\n",
+    "data_paths = dataset_names\n",
+    "\n",
+    "# Plot the hyperedge distributions\n",
+    "plot_hyperedge_distribution(dataset_names, data_paths)\n",
+    "\n",
+    "# Calculate and print the proportion of hyperedges with size <= 20\n",
+    "proportions = calculate_proportion_small_hyperedges(dataset_names, data_paths, threshold=20)\n",
+    "print(\"Proportion of hyperedges with size <= 20:\")\n",
+    "for dataset, proportion in proportions.items():\n",
+    "    print(f\"{dataset}: {proportion:.4f}\")\n",
+    "\n",
+    "\n",
+    "\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f063551f-ff32-4804-ab8a-70e23a896f2d",
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3 (ipykernel)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.4"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
